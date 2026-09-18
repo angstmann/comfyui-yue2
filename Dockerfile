@@ -41,3 +41,19 @@ RUN set -eux; \
       "https://huggingface.co/Comfy-Org/YuE2/resolve/main/checkpoints/yue2_3b_int8_convrot.safetensors"; \
     wget -O "$COMFYUI_PATH/models/audio_encoders/sheetsage2_bf16.safetensors" \
       "https://huggingface.co/Comfy-Org/YuE2/resolve/main/audio_encoders/sheetsage2_bf16.safetensors"
+# -------------------------------------------------------
+# Install official ComfyUI YuE2 workflows
+# -------------------------------------------------------
+
+RUN set -eux; \
+    mkdir -p "$COMFYUI_PATH/user/default/workflows/YuE2"; \
+    git clone --depth=1 https://github.com/Comfy-Org/workflow_templates.git /tmp/workflow_templates; \
+    find /tmp/workflow_templates/templates \
+      -maxdepth 1 \
+      -type f \
+      -iname 'audio_yue2_*.json' \
+      -exec cp {} "$COMFYUI_PATH/user/default/workflows/YuE2/" \; ; \
+    echo "Installed YuE2 workflows:"; \
+    ls -lh "$COMFYUI_PATH/user/default/workflows/YuE2/"; \
+    rm -rf /tmp/workflow_templates
+      
