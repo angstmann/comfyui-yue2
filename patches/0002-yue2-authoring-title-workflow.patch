@@ -1,0 +1,170 @@
+--- a/__init__.py
++++ b/__init__.py
+@@ -10,12 +10,15 @@
+ from .nodes_generator import YuE2SongGenerator, YuE2UnloadModel
+ from .nodes_audio import YuE2AudioSavePreview
+ from .nodes_seed import YuE2Seed
++from .nodes_text import YuE2SongDetails, YuE2Lyrics
+ 
+ # Register custom API routes (e.g. /yue2/models) with ComfyUI's server
+ init_server_routes()
+ 
+ NODE_CLASS_MAPPINGS = {
+     "YuE2SongGenerator": YuE2SongGenerator,
++    "YuE2SongDetails": YuE2SongDetails,
++    "YuE2Lyrics": YuE2Lyrics,
+     "YuE2StyleAndLyricsStudio": YuE2StyleAndLyricsStudio,
+     "YuE2AcousticStyle": YuE2AcousticStyle,  # Legacy alias
+     "YuE2LyricsStudio": YuE2LyricsStudio,    # Legacy alias
+@@ -28,6 +31,8 @@
+ 
+ NODE_DISPLAY_NAME_MAPPINGS = {
+     "YuE2SongGenerator": "YuE2 Neural Song Generator (Native)",
++    "YuE2SongDetails": "YuE2 Song Details",
++    "YuE2Lyrics": "YuE2 Lyrics",
+     "YuE2StyleAndLyricsStudio": "YuE2 Style and Lyrics Studio",
+     "YuE2InspirationPresets": "YuE2 Quick Song Starters",
+     "YuE2LLMProducer": "YuE2 LLM Co-Producer & Polisher",
+--- a/nodes_generator.py
++++ b/nodes_generator.py
+@@ -243,13 +243,14 @@
+         checkpoints = get_yue2_models()
+         return {
+             "required": {
++                "title": ("STRING", {
++                    "forceInput": True
++                }),
+                 "style": ("STRING", {
+-                    "multiline": True,
+-                    "default": "English, high emotive male tenor, K-Pop Dance Pop, heavy 808 bass, sharp synth leads, driving four-on-the-floor beat, futuristic hyper-energy vibe, 102 BPM"
++                    "forceInput": True
+                 }),
+                 "lyrics": ("STRING", {
+-                    "multiline": True,
+-                    "default": "[Verse 1]\nFlickering screen light in the dark room glow\nAnother late night where my feelings start to grow\n\n[Chorus]\nPixel heartbeat you're the rhythm in my soul\nMy electric muse that makes me feel whole\n[End]"
++                    "forceInput": True
+                 }),
+                 "cot": (["full", "melody", "off"], {
+                     "default": "full",
+@@ -311,13 +312,14 @@
+             }
+         }
+ 
+-    RETURN_TYPES = ("AUDIO", "STRING", "STRING", "STRING", "STRING", "INT")
+-    RETURN_NAMES = ("audio", "abc_score", "audio_path", "lyrics_used", "style_used", "seed")
++    RETURN_TYPES = ("AUDIO", "STRING", "STRING", "STRING", "STRING", "STRING", "INT")
++    RETURN_NAMES = ("audio", "title", "abc_score", "audio_path", "lyrics_used", "style_used", "seed")
+     FUNCTION = "generate_song"
+     CATEGORY = "YuE2/Generation"
+ 
+     def generate_song(
+         self,
++        title,
+         style,
+         lyrics,
+         cot="full",
+@@ -449,7 +451,7 @@
+             unload_native_models()
+ 
+         print("[YuE2 Native] Generation finished successfully!\n")
+-        return (audio_output, abc_text, audio_path, clean_lyrics, clean_style, seed)
++        return (audio_output, title, abc_text, audio_path, clean_lyrics, clean_style, seed)
+ 
+ 
+ class YuE2UnloadModel:
+--- /dev/null
++++ b/nodes_text.py
+@@ -0,0 +1,50 @@
++"""Simple pass-through text input nodes for YuE2."""
++
++
++class YuE2SongDetails:
++    """Song title and plain-text style editor."""
++
++    @classmethod
++    def INPUT_TYPES(cls):
++        return {
++            "required": {
++                "title": ("STRING", {
++                    "default": "Untitled Song",
++                }),
++                "style": ("STRING", {
++                    "multiline": True,
++                    "default": "",
++                }),
++            }
++        }
++
++    RETURN_TYPES = ("STRING", "STRING")
++    RETURN_NAMES = ("title", "style")
++    FUNCTION = "output_text"
++    CATEGORY = "YuE2"
++
++    def output_text(self, title, style):
++        return (title, style)
++
++
++class YuE2Lyrics:
++    """Large plain-text lyrics editor. Text is passed through unchanged."""
++
++    @classmethod
++    def INPUT_TYPES(cls):
++        return {
++            "required": {
++                "lyrics": ("STRING", {
++                    "multiline": True,
++                    "default": "",
++                }),
++            }
++        }
++
++    RETURN_TYPES = ("STRING",)
++    RETURN_NAMES = ("lyrics",)
++    FUNCTION = "output_text"
++    CATEGORY = "YuE2"
++
++    def output_text(self, lyrics):
++        return (lyrics,)
+--- a/nodes_audio.py
++++ b/nodes_audio.py
+@@ -20,6 +20,7 @@
+                 "format": (["flac", "wav", "mp3"], {"default": "mp3"}),
+             },
+             "optional": {
++                "title": ("STRING", {"forceInput": True}),
+                 "mp3_bitrate": (["320k", "256k", "192k", "128k"], {"default": "320k"}),
+                 "bit_depth": (["PCM_24", "PCM_16", "FLOAT"], {"default": "PCM_24"}),
+             }
+@@ -31,7 +32,7 @@
+     OUTPUT_NODE = True
+     CATEGORY = "YuE2/Audio"
+ 
+-    def save_and_preview(self, audio, filename_prefix="YuE2/song", save_mode="Save to Output", format="mp3", mp3_bitrate="320k", bit_depth="PCM_24", **kwargs):
++    def save_and_preview(self, audio, filename_prefix="YuE2/song", save_mode="Save to Output", format="mp3", title="", mp3_bitrate="320k", bit_depth="PCM_24", **kwargs):
+         if not audio or "waveform" not in audio or "sample_rate" not in audio:
+             raise ValueError("YuE2AudioSavePreview: Received invalid or empty audio tensor dictionary.")
+ 
+@@ -42,9 +43,21 @@
+         folder_type = "temp" if is_temp else "output"
+         base_dir = folder_paths.get_temp_directory() if is_temp else folder_paths.get_output_directory()
+ 
+-        # Sanitize prefix and compute save location
++        # Use connected song title as the filename component when supplied.
++        # Keep filename_prefix as the fallback and preserve its directory component.
++        effective_prefix = filename_prefix
++        if title and title.strip():
++            safe_title = "".join(
++                c if c.isalnum() or c in (" ", "-", "_") else "_"
++                for c in title.strip()
++            )
++            safe_title = "_".join(safe_title.split()).strip("_") or "song"
++
++            prefix_dir = os.path.dirname(filename_prefix)
++            effective_prefix = os.path.join(prefix_dir, safe_title) if prefix_dir else safe_title
++
+         full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+-            filename_prefix, base_dir
++            effective_prefix, base_dir
+         )
+         os.makedirs(full_output_folder, exist_ok=True)
+ 

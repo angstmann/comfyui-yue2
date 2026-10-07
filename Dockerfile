@@ -23,6 +23,7 @@ RUN set -eux; \
 # -------------------------------------------------------
 
 COPY patches/0001-yue2-lora-support.patch /tmp/yue2-lora-support.patch
+COPY patches/0002-yue2-authoring-title-workflow.patch /tmp/yue2-authoring-title-workflow.patch
 
 RUN set -eux; \
     mkdir -p "$COMFYUI_PATH/custom_nodes"; \
@@ -32,7 +33,8 @@ RUN set -eux; \
     cd ComfyUI-YuE2; \
     git checkout 3081a5ea74d6cfcf5a2cb21e62c2d6e06f37fef6; \
     git apply /tmp/yue2-lora-support.patch; \
-    rm /tmp/yue2-lora-support.patch; \
+    git apply /tmp/yue2-authoring-title-workflow.patch; \
+    rm /tmp/yue2-lora-support.patch /tmp/yue2-authoring-title-workflow.patch; \
     "$COMFYUI_PATH/venv/bin/python" -m pip install -r requirements.txt
 
 # -------------------------------------------------------
@@ -73,3 +75,11 @@ RUN set -eux; \
     ls -lh "$COMFYUI_PATH/user/default/workflows/YuE2/"; \
     rm -rf /tmp/workflow_templates
       
+
+
+# -------------------------------------------------------
+# Install canonical TRBDR Porch workflow
+# -------------------------------------------------------
+
+COPY workflows/TRBDR-Porch-Full-Planning.json \
+    /workspace/ComfyUI/user/default/workflows/YuE2/TRBDR-Porch-Full-Planning.json
