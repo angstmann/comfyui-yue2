@@ -1,0 +1,196 @@
+From 980954ec8f3427361ade4017664acd3981175d0e Mon Sep 17 00:00:00 2001
+From: angstmann <richard@angstmann.co.uk>
+Date: Wed, 7 Oct 2026 07:47:00 +0000
+Subject: [PATCH] Add AR and NAR LoRA support to YuE2 song generator
+
+---
+ nodes_generator.py | 152 +++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 152 insertions(+)
+
+diff --git a/nodes_generator.py b/nodes_generator.py
+index 06f51a0..e5b8899 100644
+--- a/nodes_generator.py
++++ b/nodes_generator.py
+@@ -29,6 +29,128 @@ _CACHED_MODEL = None
+ _CACHED_CLIP = None
+ _CACHED_VAE = None
+ 
++YUE2_LORA_DIR = Path(folder_paths.models_dir) / "yue2" / "loras"
++
++
++def get_yue2_loras():
++    """Return available Yue2 LoRA files, with None as the no-adapter option."""
++    if not YUE2_LORA_DIR.exists():
++        return ["None"]
++
++    files = sorted(
++        str(path.relative_to(YUE2_LORA_DIR))
++        for path in YUE2_LORA_DIR.rglob("*.safetensors")
++    )
++    return ["None"] + files
++
++
++def load_yue2_lora(model, clip, lora_name, ar_strength=1.0, nar_strength=1.0):
++    """Apply a Yue2 AR/NAR LoRA non-destructively using ComfyUI ModelPatchers.
++
++    Yue2 combined adapters use:
++      text_encoders.*   -> AR / CLIP side
++      diffusion_model.* -> NAR / acoustic model side
++
++    The underlying checkpoint is never modified.
++    """
++    if not lora_name or lora_name == "None":
++        return model, clip
++
++    lora_path = (YUE2_LORA_DIR / lora_name).resolve()
++    root = YUE2_LORA_DIR.resolve()
++
++    if root not in lora_path.parents or not lora_path.is_file():
++        raise RuntimeError(f"YuE2 LoRA not found or outside LoRA directory: {lora_name}")
++
++    print(
++        f"[YuE2 Native] Loading LoRA '{lora_name}' "
++        f"(AR={float(ar_strength):.3f}, NAR={float(nar_strength):.3f})..."
++    )
++
++    lora = comfy.utils.load_torch_file(str(lora_path), safe_load=True)
++
++    ar_keys = [k for k in lora if k.startswith("text_encoders.")]
++    nar_keys = [k for k in lora if k.startswith("diffusion_model.")]
++    unknown = [k for k in lora if not (
++        k.startswith("text_encoders.") or
++        k.startswith("diffusion_model.")
++    )]
++
++    if not ar_keys and not nar_keys:
++        raise RuntimeError(
++            f"'{lora_name}' contains no recognised Yue2 AR or NAR tensors."
++        )
++
++    if unknown:
++        raise RuntimeError(
++            f"'{lora_name}' contains {len(unknown)} unsupported tensor(s); "
++            f"first: {unknown[0]}"
++        )
++
++    # Explicit Yue2 key maps.  This avoids relying on assumptions in generic
++    # image-model LoRA key discovery.
++    model_key_map = {}
++    for key in model.model.state_dict().keys():
++        if key.endswith(".weight"):
++            stem = key[:-len(".weight")]
++            model_key_map[stem] = key
++
++    clip_key_map = {}
++    for key in clip.cond_stage_model.state_dict().keys():
++        if key.endswith(".weight"):
++            stem = key[:-len(".weight")]
++            clip_key_map[f"text_encoders.{stem}"] = key
++
++    loaded_ar = comfy.lora.load_lora(lora, clip_key_map, log_missing=False)
++    loaded_nar = comfy.lora.load_lora(lora, model_key_map, log_missing=False)
++
++    if ar_keys and not loaded_ar:
++        raise RuntimeError(
++            f"YuE2 LoRA AR mapping failed for '{lora_name}'."
++        )
++
++    if nar_keys and not loaded_nar:
++        raise RuntimeError(
++            f"YuE2 LoRA NAR mapping failed for '{lora_name}'."
++        )
++
++    print(
++        f"[YuE2 Native] LoRA mapping: "
++        f"{len(loaded_ar)} AR patches, {len(loaded_nar)} NAR patches."
++    )
++
++    patched_model = model.clone()
++    patched_clip = clip.clone()
++
++    nar_applied = patched_model.add_patches(
++        loaded_nar,
++        strength_patch=float(nar_strength),
++    )
++    ar_applied = patched_clip.add_patches(
++        loaded_ar,
++        strength_patch=float(ar_strength),
++    )
++
++    if len(nar_applied) != len(loaded_nar):
++        raise RuntimeError(
++            f"YuE2 NAR patch coverage incomplete: "
++            f"{len(nar_applied)}/{len(loaded_nar)}"
++        )
++
++    if len(ar_applied) != len(loaded_ar):
++        raise RuntimeError(
++            f"YuE2 AR patch coverage incomplete: "
++            f"{len(ar_applied)}/{len(loaded_ar)}"
++        )
++
++    print(
++        f"[YuE2 Native] LoRA mapped successfully: "
++        f"{len(loaded_ar)} AR patches, {len(loaded_nar)} NAR patches."
++    )
++
++    return patched_model, patched_clip
++
++
+ def normalize_text(text) -> str:
+     if not text:
+         return ""
+@@ -168,6 +290,24 @@ class YuE2SongGenerator:
+                     "default": False,
+                     "tooltip": "If True, saves a copy of the synthesized audio file to ComfyUI/output/YuE2/"
+                 }),
++                "lora": (get_yue2_loras(), {
++                    "default": "None",
++                    "tooltip": "Optional Yue2 LoRA from ComfyUI/models/yue2/loras/"
++                }),
++                "lora_ar_strength": ("FLOAT", {
++                    "default": 1.0,
++                    "min": 0.0,
++                    "max": 2.0,
++                    "step": 0.05,
++                    "tooltip": "AR/text-encoder LoRA strength. Affects Full/Melody planning and semantic generation."
++                }),
++                "lora_nar_strength": ("FLOAT", {
++                    "default": 1.0,
++                    "min": 0.0,
++                    "max": 2.0,
++                    "step": 0.05,
++                    "tooltip": "NAR/acoustic LoRA strength."
++                }),
+             }
+         }
+ 
+@@ -200,6 +340,9 @@ class YuE2SongGenerator:
+         top_k=100,
+         repetition_penalty=1.2,
+         save_intermediate_artifacts=False,
++        lora="None",
++        lora_ar_strength=1.0,
++        lora_nar_strength=1.0,
+         **kwargs
+     ):
+         # Resolve models
+@@ -210,6 +353,15 @@ class YuE2SongGenerator:
+             clip = clip or loaded_clip
+             vae = vae or loaded_vae
+ 
++        if lora and lora != "None":
++            model, clip = load_yue2_lora(
++                model,
++                clip,
++                lora,
++                ar_strength=lora_ar_strength,
++                nar_strength=lora_nar_strength,
++            )
++
+         clean_style = normalize_text(style)
+         clean_lyrics = clean_yue2_lyrics(normalize_text(lyrics))
+ 
+-- 
+2.54.0 (Apple Git-157)
+

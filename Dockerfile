@@ -22,12 +22,17 @@ RUN set -eux; \
 # Install ComfyUI-YuE2
 # -------------------------------------------------------
 
+COPY patches/0001-yue2-lora-support.patch /tmp/yue2-lora-support.patch
+
 RUN set -eux; \
     mkdir -p "$COMFYUI_PATH/custom_nodes"; \
     cd "$COMFYUI_PATH/custom_nodes"; \
     rm -rf ComfyUI-YuE2; \
-    git clone --depth=1 https://github.com/nvmax/ComfyUI-YuE2.git; \
+    git clone https://github.com/nvmax/ComfyUI-YuE2.git; \
     cd ComfyUI-YuE2; \
+    git checkout 3081a5ea74d6cfcf5a2cb21e62c2d6e06f37fef6; \
+    git apply /tmp/yue2-lora-support.patch; \
+    rm /tmp/yue2-lora-support.patch; \
     "$COMFYUI_PATH/venv/bin/python" -m pip install -r requirements.txt
 
 # -------------------------------------------------------
@@ -41,6 +46,17 @@ RUN set -eux; \
       "https://huggingface.co/Comfy-Org/YuE2/resolve/main/checkpoints/yue2_3b_int8_convrot.safetensors"; \
     wget -O "$COMFYUI_PATH/models/audio_encoders/sheetsage2_bf16.safetensors" \
       "https://huggingface.co/Comfy-Org/YuE2/resolve/main/audio_encoders/sheetsage2_bf16.safetensors"
+# -------------------------------------------------------
+# TRBDR Porch LoRA
+# -------------------------------------------------------
+
+RUN set -eux; \
+    mkdir -p "$COMFYUI_PATH/models/yue2/loras"; \
+    wget -O "$COMFYUI_PATH/models/yue2/loras/trbdr_porch.safetensors" \
+      "https://huggingface.co/becausereasons/yue2-trbdr-folk-troubadour/resolve/main/trbdr_porch.safetensors"; \
+    echo "a6a9cdbb980ded2f05d08ccb23b35ef1ef949a1e8da900683816020eaeb41832  $COMFYUI_PATH/models/yue2/loras/trbdr_porch.safetensors" \
+      | sha256sum -c -
+
 # -------------------------------------------------------
 # Install official ComfyUI YuE2 workflows
 # -------------------------------------------------------
